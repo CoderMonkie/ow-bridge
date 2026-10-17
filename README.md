@@ -97,9 +97,9 @@ Windows 首次启动默认读取系统 HTTP/HTTPS 代理，没有可用配置时
 
 ### OpenCode 2 兼容
 
-支持识别 `opencode v2.x`，适配 V2 的模型目录、会话、权限和消息接口；1.x 与 2.x 使用独立数据目录。首次使用 V2 会进行兼容检测：如果上游明确返回“free tier can only be used from within OpenCode”，自动改用应用独立下载的官方 1.x，不修改用户安装的 OpenCode。其他报错不触发此回退。
+支持识别 `opencode v2.x`，适配 V2 的模型目录、会话、权限和消息接口；1.x 与 2.x 使用独立数据目录，不自动降级。未找到本地运行时时，默认下载仍使用官方 `opencode-ai` 通道。
 
-macOS 上已复现官方 OpenCode 2.0.32 CLI 自身也返回该 403；V2 协议路径通过模拟服务测试，免费模型完整流程需经 1.x 兼容路径。此次 V2 改动尚未在 Windows 实机测试。
+macOS 上使用官方 OpenCode 2.0.32，Big Pickle 与 Space Bunny 均通过真实 HTTP 工具调用、工具结果回传及 SSE 回答验证。同机对照中，直连返回免费层 403，启用系统代理后成功；具体上游原因尚未确定。遇到同样错误可使用控制面板已有的系统代理开关，应用不会自动更改已保存的选择。此次 V2 改动尚未在 Windows 实机测试，也未在 WorkBuddy GUI 中复测完整任务。详见 [验证记录](docs/opencode-v2.md)。
 
 ### v0.2.9：启动恢复与选择性导入
 

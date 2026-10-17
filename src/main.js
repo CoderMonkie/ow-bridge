@@ -6,7 +6,7 @@ import { resolveModelsFile, validateModelsFile } from './workbuddy-config.js';
 import { searchConfig, windowsSearchRoots } from './config-finder.js';
 import { dataDirectory } from './platform.js';
 import { randomBytes } from 'node:crypto';
-import { findRuntime, startCompatibleBackend } from './runtime.js';
+import { findRuntime, startBackend } from './runtime.js';
 import { createServer } from './server.js';
 import { listenService } from './service-instance.js';
 import { systemProxyEnvironment } from './system-proxy.js';
@@ -203,10 +203,10 @@ async function refresh(restartRuntime = false, useSystemProxy = state.useSystemP
   update({ phase: 'reading', message: '正在读取免费模型…', models: [], availableModels: [] });
   refreshing = (async () => {
     if (restartRuntime) {
-      const next = attachTranslator(await startCompatibleBackend(binary, dataDir, log, proxyEnv, message => update({ message })));
+      const next = attachTranslator(await startBackend(binary, dataDir, log, proxyEnv));
       if (stopping) { await next.stop(); return; }
       const old = runtime;
-      runtime = next; binary = next.binary;
+      runtime = next;
       watchRuntime(next);
       await old?.stop();
       update({ useSystemProxy });
@@ -333,8 +333,7 @@ try {
   server = createServer({ server, key, selectModel, backend: { complete: (...args) => runtime.backend.complete(...args) }, getModels: publishedModels, refresh: readModels, importModels, findConfig, setSystemProxy,
     status: () => state, probe: startProbes, onResult: record, onActivity: noteActivity });
   update({ message: '正在启动隔离模型服务' });
-  runtime = attachTranslator(await startCompatibleBackend(binary, dataDir, log, startupProxyEnv, message => update({ message })));
-  binary = runtime.binary;
+  runtime = attachTranslator(await startBackend(binary, dataDir, log, startupProxyEnv));
   watchRuntime(runtime);
   // Confirm this runtime has the dedicated agent, not a user's build agent.
   const agents = await runtime.backend.request('/agent');

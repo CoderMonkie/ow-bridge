@@ -143,7 +143,7 @@ export async function findRuntime(dataDir, updateStatus, options = {}) {
     .sort((a, b) => b.name.localeCompare(a.name, 'en', { numeric: true }));
   for (const entry of installed) {
     const file = path.join(root, entry.name, pkg.binary);
-    try { if ((!options.major || entry.name.startsWith(`${options.major}.`)) && await version(file) === entry.name) local.push({ file, version: entry.name, source: 'managed runtime' }); } catch {}
+    try { if (await version(file) === entry.name) local.push({ file, version: entry.name, source: 'managed runtime' }); } catch {}
   }
   const candidates = options.candidates ?? runtimeCandidates(pkg);
   const rejected = [];
@@ -158,7 +158,6 @@ export async function findRuntime(dataDir, updateStatus, options = {}) {
     try {
       const found = runtimeVersion(await version(file));
       if (!VERSION.test(found)) { rejected.push(`${file}: unrecognized version output (${found || 'empty'})`); continue; }
-      if (options.major && !found.startsWith(`${options.major}.`)) continue;
       const target = path.join(root, found, pkg.binary);
       // Never rewrite a binary that already reports this version. Windows cannot replace a running
       // image, so re-copying would fail for nothing whenever this runtime is already in use.
@@ -243,34 +242,4 @@ export async function startBackend(binary, dataDir, logStream, proxyEnv = {}) {
     }
     throw new Error('OpenCode startup timed out');
   } catch (e) { await stop(); throw e; }
-}
-
-export const freeTierRejected = error => error?.status === 403 && /free tier can only be used from within OpenCode/i.test(error.message || '');
-
-// Some V2 releases are rejected by Zen even through the official standalone CLI.
-// Keep the user's installation intact and use our own V1 runtime for that precise error.
-export async function startCompatibleBackend(binary, dataDir, logStream, proxyEnv, updateStatus = () => {}) {
-  let runtime = await startBackend(binary, dataDir, logStream, proxyEnv);
-  if (runtime.version.startsWith('2.')) {
-    try {
-      const models = await runtime.backend.models();
-      const model = models[0];
-      const { prepare } = await import('./protocol.js');
-      const { probeBody } = await import('./probe.js');
-      await runtime.backend.complete(prepare(probeBody(model, 'compatibility-check'), models), AbortSignal.timeout(60000), { probe: true });
-    } catch (error) {
-      if (freeTierRejected(error)) {
-        const message = `OpenCode ${runtime.version} 免费模型被上游拒绝，正在切换独立的 1.x 兼容运行时`;
-        updateStatus(message); logStream.write(`${new Date().toISOString()} ${message}\n`);
-        await runtime.stop();
-        binary = await findRuntime(dataDir, updateStatus, { major: 1, proxyEnv, log: message => logStream.write(`${message}\n`) });
-        runtime = await startBackend(binary, dataDir, logStream, proxyEnv);
-        runtime.compatibility = message;
-      } else {
-        // Load, quota and model-specific errors still belong to ordinary per-model detection.
-        logStream.write(`V2 compatibility probe: ${error.message}\n`);
-      }
-    }
-  }
-  return Object.assign(runtime, { binary });
 }

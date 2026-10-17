@@ -4,7 +4,7 @@ import http from 'node:http';
 import { BackendV2, freeModelsV2, isolatedConfigV2 } from '../src/backend-v2.js';
 import { prepare } from '../src/protocol.js';
 import { probeBody, judgeProbe } from '../src/probe.js';
-import { runtimeVersion, freeTierRejected } from '../src/runtime.js';
+import { runtimeVersion } from '../src/runtime.js';
 
 const model = { id: 'opencode/test', name: 'Test', variants: {} };
 test('V2 versions, tiered prices and capability declarations are normalized conservatively', () => {
@@ -18,9 +18,6 @@ test('V2 versions, tiered prices and capability declarations are normalized cons
   assert.equal(models[0].images, true);
   assert.equal(models[0].reasoning, true);
   assert.deepEqual(models[0].variants, { high: { reasoningEffort: 'high' } });
-  assert.equal(freeTierRejected({ status: 403, message: "OpenCode's free tier can only be used from within OpenCode" }), true);
-  assert.equal(freeTierRejected({ status: 403, message: 'Not available in your country' }), false);
-  assert.equal(freeTierRejected({ status: 429, message: 'Quota exceeded' }), false);
   assert.deepEqual(isolatedConfigV2.agents['buddy-bridge'].permissions[0], { action: '*', resource: '*', effect: 'ask' });
 });
 
