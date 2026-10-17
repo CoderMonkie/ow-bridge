@@ -75,3 +75,5 @@ Bun 官方支持 `BUN_OPTIONS=--dns-result-order=ipv6first`，但在本机 2.0.3
 本轮验证：Mac 与 Windows 各通过 112 项测试；Mac OpenCode 2.0.32 在 IPv6 直连和系统代理两种模式下，Big Pickle、Space Bunny 均完成工具调用与 SSE 结果回传。Windows 免安装包中的 Electron/源码在 IPv6 直连下完成同样两模型往返。Mac 旧版 1.19.3 的两个模型工具探测也通过。修复了一处客户端连接重置未被捕获的问题，避免网络断开导致进程退出。以上均使用独立测试目录，未修改 WorkBuddy 配置。
 
 Mac 新包签名完整性校验通过。包内 Electron 复测 Space Bunny 完整通过；Big Pickle 本轮触发测试脚本 90 秒等待上限，源码同路径此前通过。仍需保留模型响应波动的限制说明，不代表所有调用稳定。
+
+Windows 最后一轮包内复测 Big Pickle 的首次工具调用通过，结果回传阶段超过测试脚本 90 秒上限；前一轮同版本双模型完整通过。最后补丁仅捕获客户端 socket 错误，不能据此宣称模型响应波动已解决。
