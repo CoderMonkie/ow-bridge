@@ -206,6 +206,8 @@ export async function startBackend(binary, dataDir, logStream, proxyEnv = {}) {
     if (process.env[k]) env[k] = process.env[k];
   for (const name of ['config', 'data', 'cache', 'state']) env[`XDG_${name.toUpperCase()}_HOME`] = path.join(root, name);
   Object.assign(env, proxyEnv);
+  // V2's Windows file database opens read-only; bridge sessions are disposable.
+  if (v2 && process.platform === 'win32') env.OPENCODE_DB = ':memory:';
   const password = randomBytes(24).toString('hex');
   Object.assign(env, { OPENCODE_SERVER_PASSWORD: password, OPENCODE_SERVER_USERNAME: 'opencode',
     OPENCODE_DISABLE_AUTOUPDATE: 'true', OPENCODE_DISABLE_PROJECT_CONFIG: 'true',
