@@ -18,6 +18,25 @@
 
 报错为 `OpenCode's free tier can only be used from within OpenCode`。此前官方 CLI 自身在直连下也复现了这一错误。此对照证明网络路径影响本机结果，不能据此确定上游具体拒绝原因。未修改鉴权、请求头，也未复制用户凭据；保留用户保存的系统代理开关。
 
+## Mac 直连进一步定位（2026-10-18）
+
+同一官方 2.0.32 二进制、相同隔离配置、Big Pickle 与 Space Bunny 两个模型，逐轮切换网络路径：
+
+| 路径 | 结果 |
+| --- | --- |
+| 默认直连 | 本轮三次启动共 6 次模型检测均返回 FreeTierError |
+| 本地宽带固定 IPv4 | 两轮共 4 次检测均返回 FreeTierError |
+| 本地宽带固定 IPv6 | 两轮共 4 次检测均成功返回正确外部 Read 调用 |
+| 已配置系统代理 | 本轮 2 次检测均成功 |
+
+固定地址类型使用测试用的本机 CONNECT 转发器，仅限制上游 socket 的 `family`；TLS 由官方 OpenCode 与服务端直接协商，未解密请求、伪造请求头、改鉴权或经过外部代理。两轮分别命中不同的服务端地址，结果保持一致。
+
+通过 `lsof` 记录默认直连 OpenCode 子进程，确认实际推理连接使用 IPv4，而非根据 curl 的地址选择推断。curl/Node 的 Cloudflare trace 另确认本机 IPv4 与 IPv6 均为国内出口；系统代理是另一出口。因而不能把结果解释成“必须使用 VPN”或“中国出口一律不可用”。Windows 的 IPv4 出口与 Mac 相同，IPv6 地址不同；此前 Windows 直连成功时未记录推理 socket，不能断言它用了哪一种。
+
+可以确定本机当前默认 IPv4 推理路径被上游拒绝，本地 IPv6 路径可用。仍不能仅凭统一 FreeTierError 判断是出口 IP 限制、额度、风险判断，还是上游不同路径的服务策略异常；具体拒绝规则需要服务端日志。未因此修改产品网络默认值、系统 DNS 或 VPN 设置。
+
+相关上游报告：[官方客户端的同类网络相关 403](https://github.com/anomalyco/opencode/issues/56334)。该报告不是本机根因的证明，以上结论来自本机对照实验。
+
 ## 完整请求验证
 
 通过 OW Bridge 的真实 `/v1/chat/completions` HTTP 接口，对上述两个模型分别验证：
