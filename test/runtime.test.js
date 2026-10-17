@@ -211,3 +211,17 @@ test('dead proxy falls back to direct metadata and tarball with integrity verifi
   assert.equal(await fs.readFile(file,'utf8'),synthetic.content('1.18.33'));
   assert.deepEqual(calls,[true,false,false]);
 });
+
+test('V2 prefixed version is reused, while V1 fallback ignores managed and local V2 binaries', async t => {
+  const root = await fixture(t);
+  const pkg = runtimePackage();
+  const source = path.join(root, 'source', pkg.binary);
+  await binary(source, 'opencode v2.0.32');
+  const managed = path.join(root, 'managed');
+  const options = { probe: synthetic.probe, candidates: [source], latest: async () => { throw new Error('offline'); } };
+  const copied = await findRuntime(managed, () => {}, options);
+  assert.equal(copied, path.join(managed, 'runtime', '2.0.32', pkg.binary));
+  const v1 = path.join(managed, 'runtime', '1.19.3', pkg.binary);
+  await binary(v1, '1.19.3');
+  assert.equal(await findRuntime(managed, () => {}, { ...options, major: 1 }), v1);
+});

@@ -52,7 +52,7 @@ export class Backend {
           const text = Buffer.concat(chunks).toString();
           if (response.statusCode < 200 || response.statusCode >= 300)
             return reject(new BridgeError(`OpenCode HTTP ${response.statusCode}: ${text.slice(0, 600)}`, response.statusCode >= 500 ? 502 : response.statusCode, 'upstream_error'));
-          try { resolve(JSON.parse(text)); }
+          try { resolve(response.statusCode === 204 ? null : JSON.parse(text)); }
           catch { reject(new BridgeError('OpenCode returned non-JSON response', 502, 'upstream_error')); }
         });
       });
