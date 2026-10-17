@@ -33,7 +33,7 @@
 
 通过 `lsof` 记录默认直连 OpenCode 子进程，确认实际推理连接使用 IPv4，而非根据 curl 的地址选择推断。curl/Node 的 Cloudflare trace 另确认本机 IPv4 与 IPv6 均为国内出口；系统代理是另一出口。因而不能把结果解释成“必须使用 VPN”或“中国出口一律不可用”。Windows 的 IPv4 出口与 Mac 相同，IPv6 地址不同；此前 Windows 直连成功时未记录推理 socket，不能断言它用了哪一种。
 
-可以确定本机当前默认 IPv4 推理路径被上游拒绝，本地 IPv6 路径可用。仍不能仅凭统一 FreeTierError 判断是出口 IP 限制、额度、风险判断，还是上游不同路径的服务策略异常；具体拒绝规则需要服务端日志。未因此修改产品网络默认值、系统 DNS 或 VPN 设置。
+可以确定本机当前默认 IPv4 推理路径被上游拒绝，本地 IPv6 路径可用。仍不能仅凭统一 FreeTierError 判断是出口 IP 限制、额度、风险判断，还是上游不同路径的服务策略异常；具体拒绝规则需要服务端日志。排查阶段未修改产品网络默认值、系统 DNS 或 VPN 设置。随后按用户要求，将关闭系统代理的模型路径固定为本地 IPv6，开启开关则保留系统代理路径。
 
 相关上游报告：[官方客户端的同类网络相关 403](https://github.com/anomalyco/opencode/issues/56334)。该报告不是本机根因的证明，以上结论来自本机对照实验。
 
@@ -65,3 +65,13 @@
 补跑 Mac 时 Big Pickle 在工具结果回传后有一次 `invalid_model_output`，Space Bunny 通过；此前成功不能保证每次模型输出都符合格式。
 
 未在 WorkBuddy GUI 中复测完整任务；不能将两个模型的成功推广为所有模型或所有复杂任务均通过。Mac 产物使用临时签名，不是 Apple Developer ID 签名或公证。
+
+## IPv6 开关实现
+
+Bun 官方支持 `BUN_OPTIONS=--dns-result-order=ipv6first`，但在本机 2.0.32 二进制中实测推理连接仍使用 IPv4 并被拒绝，因此未采用该参数。实现采用仅监听回环地址的 CONNECT 转发器，固定 `net.connect` 的 `family: 6`，TLS 仍由官方客户端与服务器协商。转发器随运行时停止、异常退出或启动失败清理；不更改系统 DNS，不回退 IPv4。开启系统代理时不创建该转发器。
+
+新增测试覆盖 IPv6 连接选项、字节透传、活动连接关闭、连接失败和目标范围校验。
+
+本轮验证：Mac 与 Windows 各通过 112 项测试；Mac OpenCode 2.0.32 在 IPv6 直连和系统代理两种模式下，Big Pickle、Space Bunny 均完成工具调用与 SSE 结果回传。Windows 免安装包中的 Electron/源码在 IPv6 直连下完成同样两模型往返。Mac 旧版 1.19.3 的两个模型工具探测也通过。修复了一处客户端连接重置未被捕获的问题，避免网络断开导致进程退出。以上均使用独立测试目录，未修改 WorkBuddy 配置。
+
+Mac 新包签名完整性校验通过。包内 Electron 复测 Space Bunny 完整通过；Big Pickle 本轮触发测试脚本 90 秒等待上限，源码同路径此前通过。仍需保留模型响应波动的限制说明，不代表所有调用稳定。
