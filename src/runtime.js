@@ -173,19 +173,12 @@ export async function findRuntime(dataDir, updateStatus, options = {}) {
   }
   local.sort((a, b) => compareVersions(b.version, a.version));
   const best = local[0];
-  let metadata;
-  try { metadata = await readLatest(); }
-  catch (e) {
-    if (best) { log(`Could not check official OpenCode latest (${e.message}); using local ${best.version}: ${best.file}`); return best.file; }
-    if (rejected.length) log(`Local OpenCode candidates were rejected (${rejected.join('; ')})`);
-    throw e;
-  }
-  if (best && compareVersions(best.version, metadata.version) >= 0) {
-    log(`Using ${best.source} OpenCode ${best.version}: ${best.file}`);
+  if (best) {
+    log(`Using local ${best.source} OpenCode ${best.version}: ${best.file}`);
     return best.file;
   }
-  if (best) log(`Local OpenCode ${best.version} is older than official ${metadata.version}; downloading official runtime`);
-  else log(rejected.length ? `Local OpenCode candidates were rejected (${rejected.join('; ')}); downloading official runtime` : 'No local OpenCode runtime found; downloading official runtime');
+  log(rejected.length ? `Local OpenCode candidates were rejected (${rejected.join('; ')}); downloading official runtime` : 'No local OpenCode runtime found; downloading official runtime');
+  const metadata = await readLatest();
   return await installLatest(metadata);
 }
 

@@ -24,7 +24,7 @@ async function binary(file, version) {
   await fs.writeFile(file, synthetic.content(version), { mode: 0o755 });
 }
 
-test('reuse local runtimes when official latest cannot be checked', async t => {
+test('reuse local runtimes without checking official latest', async t => {
   const root = await fixture(t);
   const pkg = runtimePackage();
   t.mock.method(globalThis, 'fetch', () => { throw new Error('Should not contact npm'); });
@@ -42,7 +42,7 @@ test('reuse local runtimes when official latest cannot be checked', async t => {
 });
 
 
-test('reuse local runtime only when it is not older than official latest', async t => {
+test('reuse local runtime without querying npm', async t => {
   const root = await fixture(t);
   const pkg = runtimePackage();
   const current = path.join(root, 'source', pkg.binary);
@@ -55,30 +55,21 @@ test('reuse local runtime only when it is not older than official latest', async
   });
   const copied = await findRuntime(path.join(root, 'managed'), () => {}, { probe: synthetic.probe, candidates: [current] });
   assert.equal(copied, path.join(root, 'managed', 'runtime', '1.25.7', pkg.binary));
-  assert.deepEqual(calls, [`https://registry.npmjs.org/${pkg.name}/latest`]);
+  assert.deepEqual(calls, []);
 });
 
-test('download official latest when a local runtime is stale', async t => {
+test('keep an existing older runtime even when a newer release is available', async t => {
   const root = await fixture(t);
   const pkg = runtimePackage();
-  const stale = path.join(root, 'source', pkg.binary);
-  await binary(stale, '1.17.8');
-  await binary(path.join(root, 'package', 'bin', pkg.binary), '1.18.33');
-  const archive = path.join(root, 'source.tgz');
-  await tar({ cwd: root, file: archive, gzip: true }, [`package/bin/${pkg.binary}`]);
-  const bytes = await fs.readFile(archive);
-  const url = `https://registry.npmjs.org/${pkg.name}/-/${pkg.name}-1.18.33.tgz`;
-  const calls = [];
-  t.mock.method(globalThis, 'fetch', async target => {
-    calls.push(target);
-    if (target.endsWith('/latest')) return Response.json({ name: pkg.name, version: '1.18.33',
-      dist: { integrity: `sha512-${createHash('sha512').update(bytes).digest('base64')}`, tarball: url } });
-    assert.equal(target, url);
-    return new Response(bytes);
+  const existing = path.join(root, 'runtime', '1.17.8', pkg.binary);
+  await binary(existing, '1.17.8');
+  let checks = 0;
+  const file = await findRuntime(root, () => {}, {
+    probe: synthetic.probe, candidates: [],
+    latest: async () => { checks++; return { version: '2.0.32' }; },
   });
-  const file = await findRuntime(path.join(root, 'install'), () => {}, { probe: synthetic.probe, candidates: [stale] });
-  assert.equal(file, path.join(root, 'install', 'runtime', '1.18.33', pkg.binary));
-  assert.deepEqual(calls, [`https://registry.npmjs.org/${pkg.name}/latest`, url]);
+  assert.equal(file, existing);
+  assert.equal(checks, 0);
 });
 
 test('runtime download uses the configured proxy and falls back to the npm mirror', async t => {
