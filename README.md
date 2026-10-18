@@ -2,7 +2,7 @@
 
 跨平台托盘应用，通过隔离的 OpenCode 为 WorkBuddy 提供免费模型。使用 Electron 共用界面和现有 Node.js 代理核心。
 
-> **Windows x64 免安装版已在 Windows 实机验证，推荐下载 v0.2.12 portable 包。macOS（Apple Silicon）版也有实际使用验证。Windows ARM64、Linux 仍未正式测试，不能沿用 x64 的验证结论。**
+> **Windows x64 免安装版已在 Windows 实机验证，推荐下载 v0.2.13 portable 包。macOS（Apple Silicon）版也有实际使用验证。Windows ARM64、Linux 仍未正式测试，不能沿用 x64 的验证结论。**
 
 ## 界面预览
 
@@ -16,8 +16,8 @@
 
 | 系统 | 验证状态 | 下载 |
 |---|---|---|
-| **Windows x64** | **已验证 · 推荐免安装版** | [v0.2.12 Portable ZIP](https://github.com/louchi1984-coder/ow-bridge/releases/download/v0.2.12/OW-Bridge-0.2.12-win-x64-portable.zip) |
-| macOS 13+，Apple Silicon（M 系列） | 已实际使用验证，ZIP 签名完整性检查通过 | [v0.2.12 Mac ARM64 ZIP](https://github.com/louchi1984-coder/ow-bridge/releases/download/v0.2.12/OW-Bridge-0.2.12-mac-arm64.zip) |
+| **Windows x64** | **已验证 · 推荐免安装版** | [v0.2.13 Portable ZIP](https://github.com/louchi1984-coder/ow-bridge/releases/download/v0.2.13/OW-Bridge-0.2.13-win-x64-portable.zip) |
+| macOS 13+，Apple Silicon（M 系列） | 已实际使用验证，ZIP 签名完整性检查通过 | [v0.2.13 Mac ARM64 ZIP](https://github.com/louchi1984-coder/ow-bridge/releases/download/v0.2.13/OW-Bridge-0.2.13-mac-arm64.zip) |
 | Windows ARM64 | 未正式测试，旧版 | [v0.2.2 ARM64 安装程序](https://github.com/louchi1984-coder/ow-bridge/releases/download/v0.2.2/OW-Bridge-0.2.2-win-arm64.exe) |
 | Linux x64 | 实验性，未正式测试，旧版 | [v0.2.2 AppImage](https://github.com/louchi1984-coder/ow-bridge/releases/download/v0.2.2/OW-Bridge-0.2.2-linux-x86_64.AppImage) |
 
@@ -25,8 +25,8 @@
 
 ## 使用
 
-- macOS：解压 `OW-Bridge-0.2.12-mac-arm64.zip`，双击 OW Bridge.app。
-- **Windows x64：完整解压 `OW-Bridge-0.2.12-win-x64-portable.zip`，双击文件夹里的 `OW Bridge.exe`。无需安装；不要只复制 exe，必须保留旁边的 `resources`、DLL 等文件。**
+- macOS：解压 `OW-Bridge-0.2.13-mac-arm64.zip`，双击 OW Bridge.app。
+- **Windows x64：完整解压 `OW-Bridge-0.2.13-win-x64-portable.zip`，双击文件夹里的 `OW Bridge.exe`。无需安装；不要只复制 exe，必须保留旁边的 `resources`、DLL 等文件。**
 - 首次启动自动准备 OpenCode、扫描免费模型；启动不发送模型探测，只恢复并导入 8 小时内、模型声明未变化的成功缓存。首次使用点击“检测全部”，完成后导入。
 - macOS 保持使用 `~/.workbuddy/models.json`。Windows 自动识别默认配置、已保存位置和 WorkBuddy 配置目录环境变量。常规路径找不到时，点击导入后用已检测可用的模型，通过独立 OpenCode 只读会话搜索 `models.json`；有效候选自动记住并导入；找到多个时，选择查找校验前最后访问时间最新的一份，不再弹窗选择。也可从 Windows 托盘“自动查找 WorkBuddy 配置…”重新查找，或“选择 WorkBuddy 配置…”手动指定；首次使用请先在 WorkBuddy 保存一个自定义模型。Windows 托盘菜单“选择 WorkBuddy 配置…”可更换位置，切换时清理旧文件中的本应用条目。不会在猜测的位置新建模型配置。
 - 后续重新扫描或检测不会改 WorkBuddy；点击“导入 WorkBuddy”更新，界面会反馈结果。
@@ -98,6 +98,15 @@ Windows 首次启动默认读取系统 HTTP/HTTPS 代理，没有可用配置时
 自动查找额外通过本地目录枚举补齐 OpenCode glob 可能漏掉的 `.workbuddy` 隐藏目录，并与模型找到的候选合并。自动查找只允许目录和文件名搜索，配置内容由本地程序验证，不交给模型。依赖可用的免费模型；查找失败仍可手动选择。已有有效旧文件时不会判断其是否已被 WorkBuddy 弃用，请通过托盘重新查找。详见 [配置查找说明](docs/config-finder.md)。
 
 关闭“使用系统代理”时，模型连接通过本机 IPv6 转发器直连 OpenCode，TLS 保持端到端加密，不经过外部代理；开启时使用系统 HTTP/HTTPS 代理。关闭状态要求本机网络具备 IPv6，不自动回退 IPv4。此设置不改变系统 DNS、VPN 或 npm 安装下载的网络策略。
+
+### v0.2.13：空闲会话回收与真实多轮验证
+
+- 空闲会话保留 30 分钟，最多 32 个；超过容量时清理最久未使用的会话。计时从请求完成开始，正在生成的请求不计入空闲上限，不被回收或新增超时中断。
+- 清理无需等待下一次请求；退出会等待已开始的清理。清理后再继续对话时，用 WorkBuddy 提供的完整历史建立新会话。
+- 缓存只保留历史指纹、工具调用 ID 和名称，不保留文件写入等大参数。30 分钟/32 个是单用户多对话切换与资源占用之间的工程默认值，不是上游配额。
+- 正常成功回复可以复用会话；原生工具转交、辅助翻译等路径仍保守清理，下轮从完整历史恢复。
+- macOS 和 Windows x64 各 138 项自动测试通过，覆盖过期、容量淘汰、活跃请求保护及恢复完整历史。Windows 系统代理下，官方 OpenCode 2.0.32 CLI（连接同一隔离运行时）单次回答及桥接三轮真实工具往返通过：两次工具结果正确衔接、同一上游会话、增量消息、没有额外纠正调用。本轮没有复测 WorkBuddy GUI 完整任务。
+- 同期 Mac 系统代理下，官方 CLI 首个请求返回 `403 Detect Abuse Traffic`，已停止后续请求。Windows 本次可用不代表所有出口或模型已解除限制；Windows ARM64、Linux 未正式测试。
 
 ### v0.2.12：减少重复会话和后台请求
 
