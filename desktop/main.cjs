@@ -14,6 +14,7 @@ let dataDir, lastMenu = '';
 const page = pathToFileURL(path.join(__dirname, 'index.html')).href;
 
 function showWindow() {
+  if (!app.isReady() || quitting) return;
   if (!window) {
     window = new BrowserWindow({ width: 1040, height: 740, minWidth: 880, minHeight: 620, title: 'OW Bridge', backgroundColor: '#ffffff',
       webPreferences: { preload: path.join(__dirname, 'preload.cjs'), nodeIntegration: false, contextIsolation: true, sandbox: true } });
