@@ -90,3 +90,11 @@ Windows CI 首次运行曾遇到状态文件原子替换的 `EPERM` 文件占用
 保留 SHA-512 和版本校验；官方元数据可用时，镜像 tarball 必须匹配官方校验值。若元数据本身来自第三方镜像，则信任该镜像提供的校验值。未加入“代理失效后绕过代理直连”策略，未修复任务栏图标。仅 PAC/SOCKS 仍不支持。
 
 原 Windows 修改记录为 94 项测试通过；补充官方元数据成功、tarball 转镜像，以及镜像字节不匹配拒绝安装的测试。v0.2.5 发布 Windows x64 portable，Mac 保留已修复签名的 v0.2.4，Windows ARM64/Linux 仍未正式测试。
+
+## v0.2.11：探测节流与冷却（2026-10-18）
+
+- Windows 构建目录：`D:/h/ow-release-0.2.11`，使用独立目录及现有 Electron 44.4.5 x64 缓存，未覆盖用户工作区。
+- Windows `node --test test/*.test.js`：125 通过，0 失败，0 跳过；macOS 同样 125 项通过。
+- 使用 Windows 包内 `OW Bridge.exe` 的 Electron Node 模式启动核心服务，模拟网关 403。验证启动零探测、首个错误停止、后续模型待检测、冷却跨两次重启保留；包内 `src` 和 `desktop` 文件逐一与构建源码比对一致。
+- 产物：`OW-Bridge-0.2.11-win-x64-portable.zip`。未更新 NSIS、Windows ARM64 或 Linux 包；本轮没有新增真实模型调用或 WorkBuddy GUI 任务验证。
+- 这些测试证明请求控制行为，不能据此断言上游封禁原因或保证访问恢复。
