@@ -272,13 +272,11 @@ async function updateRuntime() {
   })();
   let result;
   try { result = await refreshing; } finally { refreshing = null; }
-  if (result?.changed && !stopping) startProbes();
   return result;
 }
 
 async function readModels() {
   const result = await refresh(true);
-  if (!stopping) startProbes();
   return result;
 }
 async function setSystemProxy(enabled) {
@@ -288,7 +286,6 @@ async function setSystemProxy(enabled) {
   if (stopping) return;
   settings = { ...settings, useSystemProxy: enabled };
   await atomicWrite(settingsFile, JSON.stringify(settings));
-  startProbes(undefined, { force: true });
   return { useSystemProxy: enabled };
 }
 let configSearch;

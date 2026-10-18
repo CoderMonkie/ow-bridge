@@ -1,4 +1,5 @@
 import { BridgeError, decode, completion } from './protocol.js';
+import { Conversations } from './conversations.js';
 import { buildHandoff, handoffInput, rejectFeedback, validateAction } from './handoff.js';
 import { rawMaterial, repair, resendPrompt } from './repair.js';
 import { request as httpRequest } from 'node:http';
@@ -35,6 +36,7 @@ export class Backend {
   constructor(base, password, timeout, log = () => {}) {
     Object.assign(this, { base, password, timeout, log, active: new Map(), events: null, toolParts: new Map(), pendingApprovals: new Map(), usageBySession: new Map(), translator: null });
   }
+  closeSessions() { return this.conversations?.close(); }
   headers() {
     return { 'Content-Type': 'application/json', Authorization: `Basic ${Buffer.from(`opencode:${this.password}`).toString('base64')}` };
   }
@@ -248,9 +250,17 @@ export class Backend {
   }
 
   async complete(request, signal, meta = {}) {
+    if (request.conversationKey && !meta.probe) {
+      this.conversations ||= new Conversations(id => this.request(`/session/${encodeURIComponent(id)}`, 'DELETE', undefined, undefined, 5000).catch(e => this.log(`Session cleanup failed: ${e.code || e.name}`)));
+      return this.conversations.run(request, signal, lease => this.completeSession(request, signal, meta, lease));
+    }
+    return this.completeSession(request, signal, meta);
+  }
+  async completeSession(request, signal, meta, lease) {
     meta.steps = 0; meta.nativeAttempts = 0; meta.permissions = [];
     // Native tools require approval; the bridge aborts any attempted native action.
-    const session = await this.request('/session', 'POST', { title: 'OW Bridge', permission: Object.entries(nativePermissions).map(([permission, action]) => ({ permission, pattern: '*', action })) }, signal);
+    const session = lease?.session || await this.request('/session', 'POST', { title: 'OW Bridge', permission: Object.entries(nativePermissions).map(([permission, action]) => ({ permission, pattern: '*', action })) }, signal);
+    if (lease) lease.session = session;
     const route = `/session/${encodeURIComponent(session.id)}`;
     meta.sessionID = session.id;
     this.usageBySession.set(session.id, undefined);
@@ -291,7 +301,7 @@ export class Backend {
           type: 'object', properties: { content: { type: 'string' }, calls: callsSchema },
           required: ['content', 'calls'], additionalProperties: false,
         } } }),
-        parts: [{ type: 'text', text: request.text }, ...(request.images ?? [])],
+        parts: [...(lease?.toolCalls?.length ? [{ type: 'text', text: `The previous response was assigned these external tool call IDs, in the same order as its calls. Match the new tool results to them: ${JSON.stringify(lease.toolCalls.map(call => ({ id: call.id, name: call.function.name })))}` }] : []), { type: 'text', text: lease?.text ?? request.text }, ...(lease?.images ?? request.images ?? [])],
       };
       let actionRetried = false;
       for (let attempt = 0; attempt < 3; attempt++) {
@@ -396,6 +406,7 @@ export class Backend {
         }
         meta.calls = message.tool_calls?.length ?? 0;
         successful = true;
+        if (lease) lease.reusable = true;
         return completion(request.model.id, message, response.info?.tokens);
       }
     } finally {
@@ -411,7 +422,7 @@ export class Backend {
       }
       // Cancellation must stop backend work, not merely disconnect the HTTP request.
       if (!successful) await this.request(`${route}/abort`, 'POST', undefined, undefined, 5000).catch(() => {});
-      await this.request(route, 'DELETE', undefined, undefined, 5000).catch(e => console.error('Session cleanup failed:', e.code || e.name));
+      if (!lease?.reusable) await this.request(route, 'DELETE', undefined, undefined, 5000).catch(e => console.error('Session cleanup failed:', e.code || e.name));
     }
   }
 }

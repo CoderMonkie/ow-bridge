@@ -75,3 +75,35 @@ test('V2 upstream errors retain their status; cancellation interrupts and delete
   assert.ok(cancel.calls.some(c => c.route.endsWith('/interrupt')));
   assert.ok(cancel.calls.some(c => c.method === 'DELETE'));
 });
+
+test('V2 continuation reuses session, sends delta plus tool IDs, and does not repeat protocol instructions', async t => {
+  const { backend, calls } = await fixture(t, 'text');
+  const body = probeBody(model, 'abc');
+  const first = { ...prepare(body, [model]), conversationKey: 'conversation' };
+  const result = await backend.complete(first, AbortSignal.timeout(5000));
+  const reply = result.choices[0].message;
+  const tool = { role: 'tool', tool_call_id: reply.tool_calls[0].id, content: 'file content' };
+  await backend.complete({ ...prepare({ ...body, messages: [...body.messages, reply, tool] }, [model]), conversationKey: 'conversation' }, AbortSignal.timeout(5000));
+  assert.equal(calls.filter(c => c.route === '/api/session').length, 1);
+  assert.equal(calls.filter(c => c.method === 'DELETE').length, 0);
+  const prompts = calls.filter(c => c.route.endsWith('/prompt'));
+  assert.match(prompts[0].body.text, /matching this schema/);
+  assert.doesNotMatch(prompts[1].body.text, /matching this schema/);
+  assert.match(prompts[1].body.text, /file content/);
+  assert.ok(prompts[1].body.text.includes(reply.tool_calls[0].id));
+  assert.ok(!prompts[1].body.text.includes(body.messages[0].content));
+  await backend.closeSessions();
+  assert.equal(calls.filter(c => c.method === 'DELETE').length, 1);
+});
+
+test('V2 snapshots request newest messages so long retained sessions do not return the first page', async t => {
+  const server = http.createServer((req, res) => {
+    assert.equal(new URL(req.url, 'http://localhost').searchParams.get('order'), 'desc');
+    res.setHeader('Content-Type', 'application/json');
+    res.end(JSON.stringify({ data: [{ id: 'new', type: 'assistant', content: [] }, { id: 'old', type: 'assistant', content: [] }] }));
+  });
+  await new Promise(r => server.listen(0, '127.0.0.1', r));
+  t.after(() => { server.closeAllConnections(); server.close(); });
+  const backend = new BackendV2(`http://127.0.0.1:${server.address().port}`, 'test');
+  assert.deepEqual((await backend.snapshot('session')).map(m => m.info.id), ['old', 'new']);
+});

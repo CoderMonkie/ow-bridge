@@ -1,6 +1,6 @@
 import { clientModelID } from './model-status.js';
 import http from 'node:http';
-import { randomUUID, timingSafeEqual } from 'node:crypto';
+import { randomUUID, timingSafeEqual, createHash } from 'node:crypto';
 import { prepare, sendSSE, BridgeError } from './protocol.js';
 
 function authorized(req, key) {
@@ -54,6 +54,11 @@ export function createServer({ server = http.createServer(), key, selectModel, b
       const body = await readBody(req);
       model = body.model;
       const request = prepare(body, getModels());
+      const conversation = req.headers['x-conversation-id'];
+      if (typeof conversation === 'string' && conversation.trim()) {
+        // WorkBuddy supplies this header on custom-model requests. Keep it local.
+        request.conversationKey = createHash('sha256').update(JSON.stringify([conversation, req.headers['x-agent-purpose'] || ''])).digest('hex');
+      }
       model = request.model.id;
       meta = { tools: request.tools.length, model: request.model.id, ...(onActivity ? { activity: onActivity } : {}) };
       if (body.stream) {

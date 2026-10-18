@@ -88,11 +88,9 @@ test('startup imports cached models without probing; repeated checks and reads r
     await waitFor(s => !s.probe.running && s.modelResults['opencode/b']?.ok === false);
     assert.equal(await fs.readFile(config, 'utf8'), initial, 'Manual detection never writes WorkBuddy');
     await post('refresh');
-    await waitFor(s => s.probe.running);
     await waitFor(s => s.phase === 'ready' && !s.probe.running && s.models.length === 2);
     assert.equal(await fs.readFile(config, 'utf8'), initial, 'Manual reading never writes WorkBuddy');
     await post('system-proxy', { enabled: false });
-    await waitFor(s => s.probe.running);
     await waitFor(s => s.phase === 'ready' && !s.probe.running);
     await checkTranslator('none');
     assert.equal(JSON.parse(await fs.readFile(path.join(root, 'settings.json'), 'utf8')).useSystemProxy, false);
@@ -102,7 +100,6 @@ test('startup imports cached models without probing; repeated checks and reads r
     assert.deepEqual(JSON.parse(await fs.readFile(config, 'utf8')).map(m => m.id), ['personal', 'OC · A']);
     catalog.failed = []; catalog.chatOnly = ['opencode/b']; await writeCatalog();
     await post('probe');
-    await waitFor(s => s.probe.running);
     await waitFor(s => !s.probe.running && s.modelResults['opencode/b']?.chatOnly);
     await post('import');
     const imported = JSON.parse(await fs.readFile(config, 'utf8'));
@@ -129,7 +126,6 @@ test('startup imports cached models without probing; repeated checks and reads r
     await post('import', { modelsFile: config });
     assert.equal(JSON.parse(await fs.readFile(config, 'utf8')).length, 3, 'A moved or deleted old file does not block choosing another configuration');
     await post('probe');
-    await waitFor(s => s.probe.running);
     child.send('shutdown'); await exited;
     await assert.rejects(fs.stat(alternate), { code: 'ENOENT' });
     assert.deepEqual(JSON.parse(await fs.readFile(config, 'utf8')), [manual], 'Exit cleans the selected configuration');

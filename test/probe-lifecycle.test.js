@@ -53,7 +53,7 @@ test('real service stops on first 403, persists cooldown over two restarts, and 
   const data = catalog(); data.gatewayErrors = { 'opencode/a': { status: 403 } };
   const f = await fixture(t, data);
   await f.start(); assert.equal((await f.requests()).length, 0, 'No full catalog probe on startup');
-  await f.post('refresh');
+  await f.post('probe');
   let state = await f.waitFor(s => s.probeBlockedUntil > Date.now() && !s.probe.running);
   assert.deepEqual((await f.requests()).map(r => r.model), ['opencode/a']);
   assert.deepEqual(state.pendingModels, ['opencode/b', 'opencode/c']);
@@ -81,7 +81,7 @@ test('chat fallback 429 also stops the entire batch', async t => {
   assert.deepEqual(state.pendingModels, ['opencode/b', 'opencode/c']);
 });
 
-test('cache skips refresh requests, changed/new and expired models are probed, startup only imports cache', async t => {
+test('catalog refresh and proxy changes never infer; manual detection refreshes changed and expired cache', async t => {
   const data = catalog(); const f = await fixture(t, data);
   await f.start(); await f.post('probe');
   await f.waitFor(s => !s.probe.running && s.availableModels.length === 3);
@@ -89,8 +89,12 @@ test('cache skips refresh requests, changed/new and expired models are probed, s
   await f.post('refresh'); assert.equal((await f.requests()).length, initial);
   data.models[1].images = true; data.models.push({ id: 'opencode/d', name: 'D' }); await f.writeCatalog();
   await f.post('refresh');
+  assert.equal((await f.requests()).length, initial);
+  await f.post('system-proxy', { enabled: false });
+  assert.equal((await f.requests()).length, initial);
+  await f.post('probe');
   await f.waitFor(s => !s.probe.running && s.availableModels.length === 4);
-  assert.deepEqual((await f.requests()).slice(initial).map(r => r.model), ['opencode/b', 'opencode/d']);
+  assert.deepEqual((await f.requests()).slice(initial).map(r => r.model), ['opencode/a', 'opencode/b', 'opencode/c', 'opencode/d']);
   await f.stop();
   const file = path.join(f.root, 'status.json'), saved = JSON.parse(await fs.readFile(file, 'utf8'));
   saved.modelResults['opencode/a'].time = new Date(Date.now() - PROBE_CACHE_TTL - 1000).toISOString();
@@ -100,6 +104,9 @@ test('cache skips refresh requests, changed/new and expired models are probed, s
   assert.equal((await f.requests()).length, before);
   assert.equal(state.availableModels.length, 3);
   assert.ok(state.pendingModels.includes('opencode/a'));
-  await f.post('refresh'); await f.waitFor(s => !s.probe.running && s.availableModels.length === 4);
+  await f.post('refresh');
+  assert.equal((await f.requests()).length, before);
+  await f.post('probe', { model: 'opencode/a' });
+  await f.waitFor(s => !s.probe.running && s.availableModels.length === 4);
   assert.deepEqual((await f.requests()).slice(before).map(r => r.model), ['opencode/a']);
 });

@@ -1482,3 +1482,23 @@ test('manual runtime update waits for idle requests and blocks mutations while u
     for (const route of ['/admin/update-runtime', '/admin/refresh', '/v1/chat/completions']) assert.equal((await post(route)).status, 409);
   } finally { finish(); server.closeAllConnections(); server.close(); }
 });
+
+test('HTTP uses explicit conversation and purpose headers locally; absent headers do not infer identity', async () => {
+  const requests = [];
+  const server = createServer({ key: 'test', backend: { complete: async r => {
+    requests.push(r); return completion(r.model.id, { role: 'assistant', content: 'OK' });
+  } }, getModels: () => models, status: () => ({ phase: 'ready' }) });
+  const base = await listen(server);
+  try {
+    for (const extra of [{}, { 'X-Conversation-ID': 'one' }, { 'X-Conversation-ID': 'one' },
+      { 'X-Conversation-ID': 'two' }, { 'X-Conversation-ID': 'one', 'X-Agent-Purpose': 'subtask' }]) {
+      const response = await fetch(base + '/v1/chat/completions', { method: 'POST', headers: { Authorization: 'Bearer test', 'Content-Type': 'application/json', ...extra }, body: JSON.stringify(body) });
+      assert.equal(response.status, 200); await response.json();
+    }
+    assert.equal(requests[0].conversationKey, undefined);
+    assert.equal(requests[1].conversationKey, requests[2].conversationKey);
+    assert.notEqual(requests[1].conversationKey, requests[3].conversationKey);
+    assert.notEqual(requests[1].conversationKey, requests[4].conversationKey);
+    assert.equal(requests[1].conversationKey.length, 64);
+  } finally { server.closeAllConnections(); server.close(); }
+});

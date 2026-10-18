@@ -233,6 +233,7 @@ async function launchBackend(binary, dataDir, logStream, proxyEnv) {
   const backend = new (v2 ? BackendV2 : Backend)(`http://127.0.0.1:${port}`, password, undefined, message => logStream.write(`${new Date().toISOString()} ${message}\n`));
   const stop = async () => {
     backend.stopEvents();
+    await backend.closeSessions();
     if (child.exitCode !== null || child.signalCode !== null) return;
     child.kill('SIGTERM');
     await Promise.race([new Promise(r => child.once('exit', r)), new Promise(r => setTimeout(r, 4000))]);

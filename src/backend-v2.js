@@ -72,18 +72,25 @@ export class BackendV2 extends Backend {
     if (!session) throw new Error(`Unsupported OpenCode 2 route: ${route}`);
     const [, id, suffix] = session;
     if (suffix === '/abort') return raw(`/api/session/${id}/interrupt`);
-    if (!suffix) return raw(`/api/session/${id}`);
+    if (!suffix) {
+      if (method === 'DELETE') this.sessionInstructions?.delete(id);
+      return raw(`/api/session/${id}`);
+    }
     if (suffix.startsWith('/message') && method === 'GET') {
-      const result = await raw(`/api/session/${id}/message?limit=100&order=asc`);
-      return result.data.map(messageV2);
+      const result = await raw(`/api/session/${id}/message?limit=100&order=desc`);
+      return result.data.map(messageV2).reverse();
     }
     if (suffix === '/message' && method === 'POST') {
       await raw(`/api/session/${id}/agent`, 'POST', { agent: body.agent });
       await raw(`/api/session/${id}/model`, 'POST', { model: { providerID: body.model.providerID, id: body.model.modelID, ...(body.variant ? { variant: body.variant } : {}) } });
-      const text = [body.system?.replace(/[^\n]*StructuredOutput[^\n]*/g, 'Return the envelope directly as JSON text. Do not invoke native tools.'), ...body.parts.filter(p => p.type === 'text').map(p => p.text),
+      const instructions = [body.system?.replace(/[^\n]*StructuredOutput[^\n]*/g, 'Return the envelope directly as JSON text. Do not invoke native tools.'),
         body.format ? `Return JSON directly as text matching this schema: ${JSON.stringify(body.format.schema)}. Do not call StructuredOutput; this runtime does not provide that tool.` : ''].filter(Boolean).join('\n\n');
+      this.sessionInstructions ||= new Map();
+      const text = [this.sessionInstructions.get(id) === instructions ? '' : instructions,
+        ...body.parts.filter(p => p.type === 'text').map(p => p.text)].filter(Boolean).join('\n\n');
       await raw(`/api/session/${id}/prompt`, 'POST', { text,
         files: body.parts.filter(p => p.type === 'file').map(p => ({ uri: p.url, name: p.filename })) });
+      this.sessionInstructions.set(id, instructions);
       let done = false, waitError;
       const wait = raw(`/api/experimental/session/${id}/wait`, 'POST', {}).then(() => { done = true; }, e => { waitError = e; done = true; });
       try {
@@ -99,8 +106,8 @@ export class BackendV2 extends Backend {
     throw new Error(`Unsupported OpenCode 2 route: ${method} ${route}`);
   }
   async snapshot(id, signal) {
-    const result = await super.request(`/api/session/${id}/message?limit=100&order=asc`, 'GET', undefined, signal, 5000);
-    const messages = result.data.map(messageV2);
+    const result = await super.request(`/api/session/${id}/message?limit=100&order=desc`, 'GET', undefined, signal, 5000);
+    const messages = result.data.map(messageV2).reverse();
     for (const message of messages) for (const part of message.parts) {
       if (part.type === 'tool') this.toolParts.set(part.callID, { tool: part.tool, input: part.state?.input || {} });
       if (['text', 'reasoning'].includes(part.type) && part.text) {
