@@ -222,6 +222,40 @@ async function refresh(restartRuntime = false, useSystemProxy = state.useSystemP
   finally { refreshing = null; }
 }
 
+async function updateRuntime() {
+  if (refreshing || probing || stopping || configSearch || state.phase !== 'ready') throw new Error('请等待当前操作完成');
+  update({ phase: 'updating', message: '正在检查 OpenCode 更新…' });
+  refreshing = (async () => {
+    let next;
+    try {
+      const proxyEnv = await systemProxyEnvironment(state.useSystemProxy);
+      const target = await findRuntime(dataDir, message => update({ message }), {
+        update: true, proxyEnv, log: message => log.write(`${new Date().toISOString()} ${message}\n`),
+      });
+      if (stopping) return;
+      if (target === binary) return { changed: false, version: runtime.version };
+      update({ message: '正在启动新版 OpenCode…' });
+      next = attachTranslator(await startBackend(target, dataDir, log, proxyEnv));
+      const discovered = await next.backend.models();
+      if (stopping) return;
+      const old = runtime;
+      runtime = next; next = null; binary = target;
+      watchRuntime(runtime);
+      models = discovered; validated.clear();
+      update({ models, availableModels: [] });
+      await old.stop();
+      return { changed: true, version: runtime.version };
+    } finally {
+      await next?.stop();
+      if (!stopping) update({ phase: 'ready', message: `运行中 · ${models.length} 个免费模型` });
+    }
+  })();
+  let result;
+  try { result = await refreshing; } finally { refreshing = null; }
+  if (result?.changed && !stopping) startProbes(undefined, true);
+  return result;
+}
+
 async function readModels() {
   const result = await refresh(true);
   if (!stopping) startProbes(undefined, true);
@@ -330,7 +364,7 @@ try {
     },
     log: message => log.write(`${new Date().toISOString()} ${message}\n`),
   });
-  server = createServer({ server, key, selectModel, backend: { complete: (...args) => runtime.backend.complete(...args) }, getModels: publishedModels, refresh: readModels, importModels, findConfig, setSystemProxy,
+  server = createServer({ server, key, selectModel, backend: { complete: (...args) => runtime.backend.complete(...args) }, getModels: publishedModels, refresh: readModels, importModels, findConfig, setSystemProxy, updateRuntime,
     status: () => state, probe: startProbes, onResult: record, onActivity: noteActivity });
   update({ message: '正在启动隔离模型服务' });
   runtime = attachTranslator(await startBackend(binary, dataDir, log, startupProxyEnv));

@@ -70,7 +70,7 @@ function renderDetails() {
 }
 function render() {
   const busy = pendingAction || state.actionBusy || state.configSearch?.running || state.probe?.running || state.phase !== 'ready';
-  for (const id of ['refresh', 'probe', 'import', 'proxy']) $(id).disabled = !!busy;
+  for (const id of ['refresh', 'probe', 'import', 'proxy', 'update-runtime']) $(id).disabled = !!busy;
   $('restart').hidden = state.phase !== 'error';
   $('restart').disabled = !!(pendingAction || state.actionBusy);
   $('proxy').disabled = !!(pendingAction || state.actionBusy || state.configSearch?.running || state.probe?.running || !['ready', 'error'].includes(state.phase));
@@ -80,9 +80,9 @@ function render() {
   $('discovered').textContent = state.models?.length || 0;
   $('available').textContent = state.availableModels?.length || 0;
   $('pending').textContent = state.models?.filter(m => rank(m) === 1).length || 0;
-  for (const [id, title, active] of [['refresh', '读取免费模型', state.actionBusy === 'refresh'], ['probe', '检测全部', state.probe?.running], ['import', '导入 WorkBuddy', state.actionBusy === 'import']]) {
+  for (const [id, title, active] of [['update-runtime', '更新 OpenCode', state.actionBusy === 'update-runtime'], ['refresh', '读取免费模型', state.actionBusy === 'refresh'], ['probe', '检测全部', state.probe?.running], ['import', '导入 WorkBuddy', state.actionBusy === 'import']]) {
     $(id).replaceChildren(); if (active) $(id).append(element('span', 'spinner'));
-    $(id).append(document.createTextNode(active ? id === 'import' ? '正在导入…' : id === 'refresh' ? '正在读取…' : '正在检测…' : title));
+    $(id).append(document.createTextNode(active ? id === 'update-runtime' ? '正在更新…' : id === 'import' ? '正在导入…' : id === 'refresh' ? '正在读取…' : '正在检测…' : title));
   }
   const sync = state.sync;
   $('sync').textContent = (state.configSearch?.running ? 'OpenCode 正在只读查找 WorkBuddy 配置…' : state.configSearch?.candidates?.length > 1 && !state.modelsFile ? '已找到配置文件，点击导入 WorkBuddy 使用最近访问的一份。' : '') || sync?.error || (sync?.time ? `已导入 ${sync.count ?? 0} 个模型 · 再次检测后需点击导入 WorkBuddy 更新` : '首次读取和检测完成后自动导入 WorkBuddy');
@@ -93,6 +93,7 @@ async function run(name, value) {
   try {
     const response = await window.buddy.action(name, value);
     if (!response.ok) throw new Error(response.error);
+    if (name === 'update-runtime') feedback(response.result.changed ? `OpenCode 已更新至 ${response.result.version}，正在重新检测模型。` : `OpenCode ${response.result.version} 已是最新，无需更新。`);
     if (name === 'selection') { state.excludedModels = response.result.excludedModels; feedback('选择已保存，点击导入 WorkBuddy 后生效。'); }
     if (name === 'import') {
       const r = response.result;
@@ -103,7 +104,7 @@ async function run(name, value) {
   finally { pendingAction = false; render(); }
 }
 function feedback(text, error = false) { $('feedback').textContent = text; $('feedback').className = error ? 'error' : ''; $('feedback').hidden = false; }
-for (const action of ['refresh', 'probe', 'import', 'restart']) $(action).onclick = () => run(action);
+for (const action of ['refresh', 'probe', 'import', 'restart', 'update-runtime']) $(action).onclick = () => run(action);
 $('proxy').onchange = () => run('system-proxy', $('proxy').checked);
 function dismiss() { selected = null; renderModels(); renderDetails(); }
 document.addEventListener('click', e => { if (!e.target.closest('.model') && !e.target.closest('#details')) dismiss(); });

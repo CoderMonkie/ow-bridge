@@ -18,7 +18,7 @@ async function readBody(req) {
 }
 function json(res, status, data) { res.writeHead(status, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(data)); }
 
-export function createServer({ server = http.createServer(), key, selectModel, backend, getModels, refresh, importModels, findConfig, setSystemProxy, probe, status, onResult = () => {}, onActivity }) {
+export function createServer({ server = http.createServer(), key, selectModel, backend, getModels, refresh, importModels, findConfig, setSystemProxy, updateRuntime, probe, status, onResult = () => {}, onActivity }) {
   const active = new Set();
   server.removeAllListeners('request');
   server.on('request', async (req, res) => {
@@ -32,6 +32,11 @@ export function createServer({ server = http.createServer(), key, selectModel, b
     try {
       if (req.method === 'GET' && route === '/health') return json(res, 200, status());
       if (req.method === 'GET' && route === '/v1/models') return json(res, 200, { object: 'list', data: getModels().map(m => ({ id: clientModelID(m), object: 'model', owned_by: 'opencode', name: clientModelID(m) })) });
+      if (req.method === 'POST' && status().phase === 'updating') throw new BridgeError('OpenCode 正在更新，请稍后重试', 409, 'busy');
+      if (req.method === 'POST' && route === '/admin/update-runtime') {
+        if (active.size > 1) throw new BridgeError('有请求正在运行，请完成后再更新 OpenCode', 409, 'busy');
+        return json(res, 200, await updateRuntime());
+      }
       if (req.method === 'POST' && route === '/admin/probe') {
         const body = await readBody(req);
         return json(res, 202, probe(body.model));

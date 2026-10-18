@@ -65,6 +65,24 @@ test('startup imports once; repeated checks and reads require import; exit remov
     assert.equal(afterFormatError.modelResults['opencode/a'].ok, true);
     assert.equal(await fs.readFile(config, 'utf8'), initial);
     catalog.formatError = false;
+    async function updateRuntime(expectedStatus) {
+      const response = await fetch(`http://127.0.0.1:${port}/admin/update-runtime`, { method: 'POST', headers: { Authorization: `Bearer ${key}` } });
+      const result = await response.json();
+      assert.equal(response.status, expectedStatus, JSON.stringify(result));
+      return result;
+    }
+    assert.equal((await updateRuntime(200)).changed, false);
+    catalog.updateError = true; await writeCatalog();
+    await updateRuntime(502);
+    await waitFor(s => s.phase === 'ready' && s.opencodeVersion === 'test');
+    catalog.updateError = false; catalog.upgrade = 'broken'; await writeCatalog();
+    await updateRuntime(502);
+    await waitFor(s => s.phase === 'ready' && s.opencodeVersion === 'test');
+    await checkTranslator('opencode/b');
+    catalog.upgrade = 'test-new'; await writeCatalog();
+    assert.deepEqual(await updateRuntime(200), { changed: true, version: 'test-new' });
+    await waitFor(s => s.phase === 'ready' && !s.probe.running && s.opencodeVersion === 'test-new');
+    assert.equal(await fs.readFile(config, 'utf8'), initial, 'Runtime update does not overwrite WorkBuddy configuration');
     catalog.failed = ['opencode/b']; await writeCatalog();
     await post('probe');
     await waitFor(s => !s.probe.running && s.modelResults['opencode/b']?.ok === false);

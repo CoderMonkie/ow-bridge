@@ -1458,3 +1458,27 @@ test('probes subscribe to tool events even without a UI activity callback', asyn
   await backend.complete(prepare(body, models), undefined, { probe: true });
   assert.equal(stopped, true, 'Release the subscription when the last session ends');
 });
+
+test('manual runtime update waits for idle requests and blocks mutations while updating', async () => {
+  let finish, entered, updates = 0, phase = 'ready';
+  const started = new Promise(resolve => { entered = resolve; });
+  const pending = new Promise(resolve => { finish = resolve; });
+  const server = createServer({ key: 'test', getModels: () => models, status: () => ({ phase }),
+    backend: { complete: async r => { entered(); await pending; return completion(r.model.id, { role: 'assistant', content: 'OK' }); } },
+    updateRuntime: async () => { updates++; return { changed: false, version: '2.0.32' }; } });
+  const base = await listen(server);
+  const headers = { Authorization: 'Bearer test', 'Content-Type': 'application/json' };
+  const post = route => fetch(base + route, { method: 'POST', headers });
+  try {
+    assert.equal((await fetch(base + '/admin/update-runtime', { method: 'POST' })).status, 401);
+    const running = fetch(base + '/v1/chat/completions', { method: 'POST', headers, body: JSON.stringify(body) });
+    await started;
+    assert.equal((await post('/admin/update-runtime')).status, 409);
+    assert.equal(updates, 0);
+    finish(); await (await running).text();
+    assert.equal((await post('/admin/update-runtime')).status, 200);
+    assert.equal(updates, 1);
+    phase = 'updating';
+    for (const route of ['/admin/update-runtime', '/admin/refresh', '/v1/chat/completions']) assert.equal((await post(route)).status, 409);
+  } finally { finish(); server.closeAllConnections(); server.close(); }
+});

@@ -136,6 +136,9 @@ test('first install resolves official latest and checks the downloaded executabl
   const file = await findRuntime(path.join(root, 'install'), () => {}, { probe: synthetic.probe, candidates: [] });
   assert.equal(file, path.join(root, 'install', 'runtime', '1.25.7', pkg.binary));
   assert.deepEqual(calls, [`https://registry.npmjs.org/${pkg.name}/latest`, url]);
+  const manualRoot = path.join(root, 'manual');
+  await binary(path.join(manualRoot, 'runtime', '1.17.8', pkg.binary), '1.17.8');
+  assert.equal(await findRuntime(manualRoot, () => {}, { probe: synthetic.probe, candidates: [], update: true }), path.join(manualRoot, 'runtime', '1.25.7', pkg.binary));
   reportedVersion = '1.25.8';
   await assert.rejects(findRuntime(path.join(root, 'mismatch'), () => {}, { probe: synthetic.probe, candidates: [] }), /version mismatch/);
 });
@@ -213,4 +216,18 @@ test('V2 prefixed version is recognized and reused from the managed directory', 
   const copied = await findRuntime(managed, () => {}, options);
   assert.equal(copied, path.join(managed, 'runtime', '2.0.32', pkg.binary));
   assert.equal(await findRuntime(managed, () => {}, { ...options, candidates: [] }), copied);
+});
+
+test('manual update checks latest without downgrading or hiding network errors', async t => {
+  const root = await fixture(t);
+  const pkg = runtimePackage();
+  const existing = path.join(root, 'runtime', '2.0.32', pkg.binary);
+  await binary(existing, '2.0.32');
+  let checks = 0;
+  const options = { probe: synthetic.probe, candidates: [], update: true,
+    latest: async () => { checks++; return { version: '2.0.31' }; } };
+  assert.equal(await findRuntime(root, () => {}, options), existing);
+  assert.equal(checks, 1);
+  await assert.rejects(findRuntime(root, () => {}, { ...options, latest: async () => { throw new Error('offline'); } }), /offline/);
+  assert.equal(await findRuntime(root, () => {}, { ...options, update: false }), existing);
 });

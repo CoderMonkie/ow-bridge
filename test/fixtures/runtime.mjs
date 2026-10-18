@@ -1,11 +1,16 @@
 import { EventEmitter } from 'node:events';
 import fs from 'node:fs/promises';
 import path from 'node:path';
-export async function findRuntime() { return 'test'; }
-export async function startBackend(_, dataDir) {
+export async function findRuntime(dataDir, _, options = {}) {
+  const catalog = JSON.parse(await fs.readFile(path.join(dataDir, 'catalog.json'), 'utf8'));
+  if (options.update && catalog.updateError) throw new Error('update download failed');
+  return options.update ? catalog.upgrade || 'test' : 'test';
+}
+export async function startBackend(binary, dataDir) {
+  if (binary === 'broken') throw new Error('new runtime startup failed');
   const child = new EventEmitter();
   const read = async () => JSON.parse(await fs.readFile(path.join(dataDir, 'catalog.json'), 'utf8'));
-  return { version: 'test', child, stop: async () => child.emit('exit'), backend: {
+  return { version: binary, child, stop: async () => child.emit('exit'), backend: {
     request: async () => [{ name: 'buddy-bridge' }],
     models: async () => (await read()).models,
     async complete(request) {
