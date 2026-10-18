@@ -7,18 +7,19 @@ function waiting(id) { return state.probe?.running && state.probe?.pending?.incl
 function label(model) {
   if (waiting(model.id)) return state.probe.current === model.id ? '检测中' : '等待检测';
   if ((state.activity || []).some(a => a.model === model.id)) return '请求中';
+  if (state.pendingModels?.includes(model.id)) return '待检测';
   const r = state.modelResults?.[model.id];
   if (state.availableModels?.includes(model.id)) return r?.chatOnly ? '可用 · 仅对话' : '可用';
   return ({ timeout: '检测超时', quota: '额度不足', rate_limit: '请求受限', access: '访问受限' })[r?.category] || (r?.ok === false ? '不可用' : '待检测');
 }
-function rank(model) { return waiting(model.id) ? 1 : state.availableModels?.includes(model.id) ? 0 : state.modelResults?.[model.id]?.ok === false ? 2 : 1; }
+function rank(model) { return waiting(model.id) || state.pendingModels?.includes(model.id) ? 1 : state.availableModels?.includes(model.id) ? 0 : state.modelResults?.[model.id]?.ok === false ? 2 : 1; }
 function timing(id) {
   const r = state.modelResults?.[id]; if (!Number.isFinite(r?.durationMs)) return '响应耗时 —';
   const duration = r.durationMs < 1000 ? `${r.durationMs} ms` : `${(r.durationMs / 1000).toFixed(1)} 秒`;
   return `最近${r.source === 'probe' ? '检测' : '调用'} · ${r.ok ? '响应' : '失败'}耗时 ${duration}`;
 }
 function renderModels() {
-  const signature = JSON.stringify([state.models, state.modelResults, state.probe, state.availableModels, state.activity, state.excludedModels, state.actionBusy, pendingAction, selected]);
+  const signature = JSON.stringify([state.models, state.modelResults, state.probe, state.pendingModels, state.availableModels, state.activity, state.excludedModels, state.actionBusy, pendingAction, selected]);
   if (signature === lastModels) return; lastModels = signature;
   const scroll = $('models').scrollTop;
   const focused = document.activeElement?.dataset?.model;
@@ -85,7 +86,7 @@ function render() {
     $(id).append(document.createTextNode(active ? id === 'update-runtime' ? '正在更新…' : id === 'import' ? '正在导入…' : id === 'refresh' ? '正在读取…' : '正在检测…' : title));
   }
   const sync = state.sync;
-  $('sync').textContent = (state.configSearch?.running ? 'OpenCode 正在只读查找 WorkBuddy 配置…' : state.configSearch?.candidates?.length > 1 && !state.modelsFile ? '已找到配置文件，点击导入 WorkBuddy 使用最近访问的一份。' : '') || sync?.error || (sync?.time ? `已导入 ${sync.count ?? 0} 个模型 · 再次检测后需点击导入 WorkBuddy 更新` : '首次读取和检测完成后自动导入 WorkBuddy');
+  $('sync').textContent = (state.configSearch?.running ? 'OpenCode 正在只读查找 WorkBuddy 配置…' : state.configSearch?.candidates?.length > 1 && !state.modelsFile ? '已找到配置文件，点击导入 WorkBuddy 使用最近访问的一份。' : '') || sync?.error || (sync?.time ? `已导入 ${sync.count ?? 0} 个模型 · 再次检测后需点击导入 WorkBuddy 更新` : '启动时仅导入有效缓存；检测后需手动导入 WorkBuddy');
   renderModels(); renderDetails();
 }
 async function run(name, value) {
@@ -93,7 +94,9 @@ async function run(name, value) {
   try {
     const response = await window.buddy.action(name, value);
     if (!response.ok) throw new Error(response.error);
-    if (name === 'update-runtime') feedback(response.result.changed ? `OpenCode 已更新至 ${response.result.version}，正在重新检测模型。` : `OpenCode ${response.result.version} 已是最新，无需更新。`);
+    if (name === 'probe' && response.result.canceled) feedback('已取消检测，继续冷却。');
+    if (name === 'probe' && response.result.message) feedback(response.result.message);
+    if (name === 'update-runtime') feedback(response.result.changed ? `OpenCode 已更新至 ${response.result.version}，仅检测需要更新结果的模型。` : `OpenCode ${response.result.version} 已是最新，无需更新。`);
     if (name === 'selection') { state.excludedModels = response.result.excludedModels; feedback('选择已保存，点击导入 WorkBuddy 后生效。'); }
     if (name === 'import') {
       const r = response.result;

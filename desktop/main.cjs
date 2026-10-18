@@ -50,7 +50,7 @@ function publish() {
     { label: '检测全部模型', enabled: !busy, click: () => trayAction('probe') },
     { label: '导入 WorkBuddy', enabled: !busy, click: () => trayAction('import') },
     ...(process.platform === 'win32' ? [{ label: '自动查找 WorkBuddy 配置…', enabled: !busy, click: () => trayAction('find-config') }, { label: '选择 WorkBuddy 配置…', enabled: !busy, click: () => trayAction('choose-config') }] : []),
-    { label: '模型状态', submenu: (state.models || []).map(m => ({ label: `OC · ${m.name} · ${available.has(m.id) ? state.modelResults?.[m.id]?.chatOnly ? '可用 · 仅对话' : '可用' : '不可用'}`, enabled: false })) },
+    { label: '模型状态', submenu: (state.models || []).map(m => ({ label: `OC · ${m.name} · ${available.has(m.id) ? state.modelResults?.[m.id]?.chatOnly ? '可用 · 仅对话' : '可用' : state.pendingModels?.includes(m.id) || !state.modelResults?.[m.id] || state.modelResults?.[m.id]?.ok ? '待检测' : '不可用'}`, enabled: false })) },
     { type: 'separator' }, { label: '退出 OW Bridge', click: () => app.quit() },
   ]));
 }
@@ -100,10 +100,18 @@ async function action(name, value) {
     }
     const key = (await fs.readFile(path.join(dataDir, 'api-key'), 'utf8')).trim();
     const endpoint = `http://127.0.0.1:${Number(process.env.BUDDY_PORT || 41980)}`;
-    const response = await fetch(`${endpoint}/admin/${name}`, { method: 'POST',
+    const send = confirmed => fetch(`${endpoint}/admin/${name}`, { method: 'POST',
       headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify(name === 'system-proxy' ? { enabled: value } : name === 'selection' ? value : modelsFile ? { modelsFile } : {}), ...(name === 'update-runtime' ? {} : { signal: AbortSignal.timeout(150000) }) });
-    const result = await response.json();
+      body: JSON.stringify(name === 'probe' ? { confirmed } : name === 'system-proxy' ? { enabled: value } : name === 'selection' ? value : modelsFile ? { modelsFile } : {}), ...(name === 'update-runtime' ? {} : { signal: AbortSignal.timeout(150000) }) });
+    let response = await send(false);
+    let result = await response.json();
+    if (name === 'probe' && response.ok && result.confirmationRequired) {
+      const choice = await dialog.showMessageBox({ type: 'warning', title: 'OW Bridge', message: '检测正在冷却，仍要重试吗？',
+        detail: '网关刚刚拒绝或限制了请求。继续检测会再次发送请求；若仍被拒绝，将立即停止并重新冷却 30 分钟。',
+        buttons: ['取消', '仍然检测'], defaultId: 0, cancelId: 0 });
+      if (choice.response !== 1) return { canceled: true };
+      response = await send(true); result = await response.json();
+    }
     if (!response.ok) throw new Error(result.error?.message || `HTTP ${response.status}`);
     await readState();
     return result;

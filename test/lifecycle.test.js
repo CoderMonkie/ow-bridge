@@ -8,7 +8,7 @@ import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { OWNER } from '../src/sync.js';
 
-test('startup imports once; repeated checks and reads require import; exit removes owned models', async () => {
+test('startup imports cached models without probing; repeated checks and reads require import; exit removes owned models', async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'buddy-lifecycle-'));
   const config = path.join(root, 'models.json');
   const manual = { id: 'personal', apiKey: 'keep' };
@@ -16,6 +16,7 @@ test('startup imports once; repeated checks and reads require import; exit remov
   const catalog = { models: [{ id: 'opencode/a', name: 'A' }, { id: 'opencode/b', name: 'B' }], failed: [] };
   const writeCatalog = () => fs.writeFile(path.join(root, 'catalog.json'), JSON.stringify(catalog));
   await writeCatalog();
+  await fs.writeFile(path.join(root, 'status.json'), JSON.stringify({ models: catalog.models, modelResults: Object.fromEntries(catalog.models.map(m => [m.id, { ok: true, time: new Date().toISOString() }])) }));
   await fs.writeFile(path.join(root, 'service.pid'), String(process.pid));
   const socket = net.createServer();
   await new Promise(resolve => socket.listen(0, '127.0.0.1', resolve));
@@ -38,9 +39,8 @@ test('startup imports once; repeated checks and reads require import; exit remov
     throw new Error('Lifecycle timeout: ' + logs);
   }
   try {
-    await waitFor(s => s.probe.running);
-    assert.deepEqual(JSON.parse(await fs.readFile(config, 'utf8')), [manual], 'Startup clears old owned entries before detection');
-    await waitFor(s => s.phase === 'ready' && !s.probe.running);
+    await waitFor(s => s.phase === 'ready' && !s.probe.running && s.sync?.count === 2);
+    await assert.rejects(fs.stat(path.join(root, 'requests.jsonl')), { code: 'ENOENT' });
     const initial = await fs.readFile(config, 'utf8');
     const backups = async () => (await fs.readdir(root)).filter(name => name.endsWith('.bak')).length;
     assert.equal(await backups(), 2, 'One startup cleanup and one import after the full batch');

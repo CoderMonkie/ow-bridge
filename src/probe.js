@@ -64,7 +64,7 @@ export async function probeModel({ complete, retries = 1 }) {
       return response;
     } catch (error) {
       lastError = error;
-      if (attempt >= retries || !RETRYABLE_PROBE.has(error.code)) throw error;
+      if ([401, 403, 429].includes(error.status) || attempt >= retries || !RETRYABLE_PROBE.has(error.code)) throw error;
     }
   }
   throw lastError;

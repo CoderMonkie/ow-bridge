@@ -14,6 +14,7 @@ import { prepare, BridgeError } from './protocol.js';
 import { PROBE_TIMEOUT, probeBody, probeModel, probeFailure, formatUnsupported } from './probe.js';
 import { modelResult, withRequestMeta } from './model-status.js';
 import { atomicWrite, syncModels } from './sync.js';
+import { cachedProbe, modelFingerprint, probeGate, runProbeQueue, PROBE_COOLDOWN, PROBE_PAUSED } from './probe-policy.js';
 
 const dataDir = process.env.BUDDY_DATA_DIR || dataDirectory();
 const port = Number(process.env.BUDDY_PORT || 41980);
@@ -33,7 +34,7 @@ const endpoint = `http://127.0.0.1:${port}/v1`;
 let models = [], runtime, binary, stopping = false, refreshing;
 let previous = {};
 try { previous = JSON.parse(await fs.readFile(path.join(dataDir, 'status.json'), 'utf8')); } catch {}
-let state = { useSystemProxy: settings.useSystemProxy === true || (process.platform === 'win32' && settings.useSystemProxy !== false), phase: 'starting', message: '正在启动', endpoint, pid: process.pid, version: '0.2.0', opencodeVersion: null, models: [], excludedModels: settings.excludedModels || [], modelResults: previous.modelResults || {}, sync: null, availableModels: [], probe: { running: false } };
+let state = { useSystemProxy: settings.useSystemProxy === true || (process.platform === 'win32' && settings.useSystemProxy !== false), phase: 'starting', message: '正在启动', endpoint, pid: process.pid, version: '0.2.0', opencodeVersion: null, models: [], excludedModels: settings.excludedModels || [], modelResults: previous.modelResults || {}, sync: null, availableModels: [], pendingModels: previous.pendingModels || [], probeBlockedUntil: Number(previous.probeBlockedUntil) || 0, probe: { running: false } };
 // Serialize status writes so an older async update cannot overwrite a newer state.
 let statusWrites = Promise.resolve();
 function update(patch) {
@@ -45,7 +46,13 @@ const logFile = path.join(dataDir, 'opencode.log');
 try { if ((await fs.stat(logFile)).size > 5 * 1024 * 1024) await fs.rename(logFile, logFile + '.previous'); } catch {}
 const log = createWriteStream(logFile, { flags: 'a', mode: 0o600 });
 const validated = new Set();
-const usableModels = () => models.filter(m => validated.has(m.id) && state.modelResults[m.id]?.ok === true).map(m => ({ ...m, chatOnly: state.modelResults[m.id]?.chatOnly === true }));
+function restoreCachedModels() {
+  validated.clear();
+  for (const model of models) if (cachedProbe(model, state.modelResults[model.id], previous.models?.find(m => m.id === model.id))) validated.add(model.id);
+  update({ models, pendingModels: models.filter(m => !validated.has(m.id) && (state.pendingModels.includes(m.id) || state.modelResults[m.id]?.ok !== false)).map(m => m.id) });
+  update({ availableModels: usableModels().map(m => m.id) });
+}
+const usableModels = () => models.filter(m => !state.pendingModels.includes(m.id) && validated.has(m.id) && state.modelResults[m.id]?.ok === true).map(m => ({ ...m, chatOnly: state.modelResults[m.id]?.chatOnly === true }));
 const publishedModels = usableModels;
 // Translation runs a second model whose only job is the shape. Detection never translates: a probe
 // must measure the model itself, not what the translator can rescue.
@@ -82,6 +89,8 @@ function syncPublished(published = publishedModels().filter(m => !(settings.excl
 async function record(model, ok, error, status, code, durationMs, source = 'request', chatOnly = source === 'request' && state.modelResults[model]?.chatOnly === true, meta = {}) {
   if (stopping) return;
   const result = withRequestMeta({ model, ...modelResult(ok, error, status, code), durationMs, source, chatOnly }, meta);
+  const catalogModel = models.find(m => m.id === model);
+  if (catalogModel) result.catalogFingerprint = modelFingerprint(catalogModel);
   // Keep the raw approval requests so a blocked native action stays diagnosable after the fact.
   const captured = Array.isArray(meta.permissions) && meta.permissions.length ? { lastPermission: { time: result.time, entries: meta.permissions } } : {};
   // A stuck provider is not a verdict on the model: record the attempt, keep it published.
@@ -126,60 +135,71 @@ function noteActivity(progress) {
 }
 let probing = false, probeTask;
 const probeAbort = new AbortController();
-function startProbes(modelID, reveal = false, autoImport = false) {
+function startProbes(modelID, { manual = false, confirmed = false, force = false } = {}) {
   if (stopping || refreshing || configSearch) throw new Error('请等待模型读取或配置查找完成');
   if (probing) return { started: false, message: '检测正在进行' };
-  const selected = modelID ? models.filter(m => m.id === modelID) : models;
-  if (!selected.length) throw new Error('模型不在当前目录中');
+  const blocked = probeGate(state.probeBlockedUntil, { manual, confirmed });
+  if (blocked) { update({ message: PROBE_PAUSED }); return blocked; }
+  const candidates = modelID ? models.filter(m => m.id === modelID) : models;
+  if (modelID && !candidates.length) throw new Error('模型不在当前目录中');
+  const selected = candidates.filter(m => manual || force || !cachedProbe(m, state.modelResults[m.id], previous.models?.find(old => old.id === m.id)));
+  if (!selected.length) return { started: false, message: '没有需要检测的模型' };
   probing = true;
-  const pending = selected.map(model => model.id);
+  update({ message: '正在检测模型…' });
+  console.log(`${new Date().toISOString()} Model detection started: ${manual ? 'manual' : 'automatic'}, ${selected.length} models`);
   probeTask = (async () => {
     try {
-      for (const model of selected) {
-        if (stopping) break;
-        update({ ...(reveal ? { models: [...state.models, model] } : {}), probe: { running: true, current: model.id, pending: [...pending] } });
-        const started = performance.now();
-        const meta = { probe: true };
-        const deadline = new AbortController();
-        let timedOut = false;
-        const timer = setTimeout(() => { timedOut = true; deadline.abort(); }, PROBE_TIMEOUT);
-        try {
-          if (model.toolcall === false) throw new BridgeError('OpenCode catalog does not advertise tool support', 502, 'invalid_tool_call');
-          // A retry shares the single deadline, so detection time stays bounded.
-          await probeModel({ complete: token => runtime.backend.complete(prepare(probeBody(model, token), models), AbortSignal.any([probeAbort.signal, deadline.signal]), meta) });
-          await record(model.id, true, undefined, undefined, undefined, Math.round(performance.now() - started), 'probe', undefined, meta);
-        } catch (cause) {
-          const e = probeFailure(cause, timedOut);
-          if (!stopping && e.code === 'no_action') {
-            // Replying with text says the model works, not that it failed: it is usable for
-            // chat only, so it is published with tools disabled instead of being withdrawn.
-            await record(model.id, true, '探测时只返回文本、未产生动作；已按仅对话发布', undefined, 'chat_only', Math.round(performance.now() - started), 'probe', true);
-          } else if (!stopping && formatUnsupported(e)) {
-            try {
-              const chatModel = { ...model, chatOnly: true };
-              await runtime.backend.complete(prepare({ model: model.id, messages: [{ role: 'user', content: 'Reply only OK.' }] }, [chatModel]), AbortSignal.any([probeAbort.signal, AbortSignal.timeout(30000)]));
-              await record(model.id, true, '工具转换不兼容：' + e.message, undefined, 'chat_only', Math.round(performance.now() - started), 'probe', true);
-            } catch (chatError) {
-              if (!stopping) await record(model.id, false, chatError.message, chatError.status, chatError.code, Math.round(performance.now() - started), 'probe');
-            }
-          } else if (!stopping) await record(model.id, false, e.name === 'TimeoutError' ? 'Model probe timed out' : e.message, e.status, e.code, Math.round(performance.now() - started), 'probe', undefined, meta);
-        } finally { clearTimeout(timer); }
-        pending.shift();
-        update({ probe: { running: true, pending: [...pending] } });
-      }
-      if (autoImport && !stopping) {
-        if (process.platform === 'win32' && !modelsFile && process.env.BUDDY_NO_SYNC !== '1') {
-          const found = await findConfig(true);
-          if (found.candidates.length) {
-            await validateModelsFile(found.candidates[0]);
-            settings = { ...settings, workBuddyModelsFile: found.candidates[0] };
-            await atomicWrite(settingsFile, JSON.stringify(settings));
-            modelsFile = found.candidates[0]; update({ modelsFile });
-          }
-        }
-        await syncPublished();
-      }
-    } finally { probing = false; update({ probe: { running: false } }); }
+      await runProbeQueue(selected, {
+        signal: probeAbort.signal,
+        onPending: pending => {
+          update({ pendingModels: [...new Set([...state.pendingModels.filter(id => !selected.some(m => m.id === id)), ...pending])], probe: { running: true, pending } });
+          update({ availableModels: usableModels().map(m => m.id) });
+        },
+        onBlocked: async error => {
+          console.log(`${new Date().toISOString()} Model detection paused: HTTP ${error.status}; ${state.probe.pending.length} models remain pending`);
+          update({ probeBlockedUntil: Date.now() + PROBE_COOLDOWN, message: PROBE_PAUSED });
+          await statusWrites;
+        },
+        probe: async model => {
+          update({ probe: { ...state.probe, current: model.id } });
+          const started = performance.now();
+          const meta = { probe: true };
+          let failure;
+          const deadline = new AbortController();
+          let timedOut = false;
+          const timer = setTimeout(() => { timedOut = true; deadline.abort(); }, PROBE_TIMEOUT);
+          try {
+            if (model.toolcall === false) throw new BridgeError('OpenCode catalog does not advertise tool support', 502, 'invalid_tool_call');
+            // A retry shares the single deadline, so detection time stays bounded.
+            await probeModel({ complete: token => runtime.backend.complete(prepare(probeBody(model, token), models), AbortSignal.any([probeAbort.signal, deadline.signal]), meta) });
+            await record(model.id, true, undefined, undefined, undefined, Math.round(performance.now() - started), 'probe', undefined, meta);
+          } catch (cause) {
+            const e = probeFailure(cause, timedOut);
+            failure = e;
+            if (!stopping && [401, 403, 429].includes(e.status)) {
+              await record(model.id, false, e.message, e.status, e.code, Math.round(performance.now() - started), 'probe', undefined, meta);
+            } else if (!stopping && e.code === 'no_action') {
+              // Replying with text says the model works, not that it failed: it is usable for
+              // chat only, so it is published with tools disabled instead of being withdrawn.
+              await record(model.id, true, '探测时只返回文本、未产生动作；已按仅对话发布', undefined, 'chat_only', Math.round(performance.now() - started), 'probe', true);
+            } else if (!stopping && formatUnsupported(e)) {
+              try {
+                const chatModel = { ...model, chatOnly: true };
+                await runtime.backend.complete(prepare({ model: model.id, messages: [{ role: 'user', content: 'Reply only OK.' }] }, [chatModel]), AbortSignal.any([probeAbort.signal, AbortSignal.timeout(30000)]));
+                await record(model.id, true, '工具转换不兼容：' + e.message, undefined, 'chat_only', Math.round(performance.now() - started), 'probe', true);
+              } catch (chatError) {
+                failure = chatError;
+                if (!stopping) await record(model.id, false, chatError.message, chatError.status, chatError.code, Math.round(performance.now() - started), 'probe');
+              }
+            } else if (!stopping) await record(model.id, false, e.name === 'TimeoutError' ? 'Model probe timed out' : e.message, e.status, e.code, Math.round(performance.now() - started), 'probe', undefined, meta);
+          } finally { clearTimeout(timer); }
+          return failure;
+        },
+      });
+    } finally {
+      probing = false;
+      update({ probe: { running: false }, ...(state.probeBlockedUntil > Date.now() ? {} : { message: `运行中 · ${models.length} 个免费模型` }) });
+    }
   })().catch(e => console.error('Model detection failed:', e.message));
   return { started: true };
 }
@@ -214,6 +234,7 @@ async function refresh(restartRuntime = false, useSystemProxy = state.useSystemP
     const discovered = await runtime.backend.models();
     if (stopping) return;
     models = discovered;
+    restoreCachedModels();
     update({ phase: 'ready', message: `运行中 · ${models.length} 个免费模型` });
     return { count: models.length };
   })();
@@ -241,8 +262,7 @@ async function updateRuntime() {
       const old = runtime;
       runtime = next; next = null; binary = target;
       watchRuntime(runtime);
-      models = discovered; validated.clear();
-      update({ models, availableModels: [] });
+      models = discovered; restoreCachedModels();
       await old.stop();
       return { changed: true, version: runtime.version };
     } finally {
@@ -252,13 +272,13 @@ async function updateRuntime() {
   })();
   let result;
   try { result = await refreshing; } finally { refreshing = null; }
-  if (result?.changed && !stopping) startProbes(undefined, true);
+  if (result?.changed && !stopping) startProbes();
   return result;
 }
 
 async function readModels() {
   const result = await refresh(true);
-  if (!stopping) startProbes(undefined, true);
+  if (!stopping) startProbes();
   return result;
 }
 async function setSystemProxy(enabled) {
@@ -268,7 +288,7 @@ async function setSystemProxy(enabled) {
   if (stopping) return;
   settings = { ...settings, useSystemProxy: enabled };
   await atomicWrite(settingsFile, JSON.stringify(settings));
-  startProbes(undefined, true);
+  startProbes(undefined, { force: true });
   return { useSystemProxy: enabled };
 }
 let configSearch;
@@ -373,6 +393,9 @@ try {
   const agents = await runtime.backend.request('/agent');
   if (!agents.some(a => a.name === 'buddy-bridge')) throw new Error('Dedicated approval-gated agent missing');
   await refresh();
-  startProbes(undefined, true, true);
+  // models.json lists installed models, not the model selected in a WorkBuddy session.
+  // Without a reliable selection, startup restores cache and sends no probe requests.
+  if (state.probeBlockedUntil > Date.now()) update({ message: PROBE_PAUSED });
+  await syncPublished();
   console.log(`OW Bridge ready at ${endpoint}; ${models.length} free models`);
 } catch (e) { update({ phase: 'error', message: e.message }); if (!runtime) await shutdown(1); }

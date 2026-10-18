@@ -14,6 +14,10 @@ export async function startBackend(binary, dataDir) {
     request: async () => [{ name: 'buddy-bridge' }],
     models: async () => (await read()).models,
     async complete(request) {
+      await fs.appendFile(path.join(dataDir, 'requests.jsonl'), JSON.stringify({ model: request.model.id, chatOnly: request.chatOnly === true, time: Date.now() }) + '\n');
+      const failures = (await read()).gatewayErrors || {};
+      const failure = failures[request.model.id];
+      if (failure && (!failure.chatOnly || request.chatOnly)) throw Object.assign(new Error('Gateway rejected'), { status: failure.status, code: 'model_error' });
       await new Promise(resolve => setTimeout(resolve, 250));
       if ((await read()).checkTranslator) return { model: request.model.id, choices: [{ message: { role: 'assistant', content: typeof this.translator === 'function' ? (this.translator(request.model.id) ?? 'none') : 'missing' } }] };
       if ((await read()).chatOnly?.includes(request.model.id) && !request.chatOnly) throw Object.assign(new Error('only auto is supported for tool_choice'), { code: 'model_error' });
